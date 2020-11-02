@@ -1,25 +1,22 @@
 {
-  "name": "lash",
+  "name": "losh",
   "version": "1.0.0",
   "description": "",
   "bin": {
-    "lash": "bin/lash.js"
+    "losh": "bin/losh.js"
   },
-  "main": "bin/lash.js",
+  "main": "bin/losh.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/loomgmbh/node-lash.git"
+    "url": "git+https://github.com/loomgmbh/node-losh.git"
   },
   "author": "TerraZero",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/loomgmbh/node-lash/issues"
+    "url": "https://github.com/loomgmbh/node-losh/issues"
   },
-  "homepage": "https://github.com/loomgmbh/node-lash#readme",
-  "devDependencies": {
-    "lash": "."
-  }
+  "homepage": "https://github.com/loomgmbh/node-losh#readme"
 }

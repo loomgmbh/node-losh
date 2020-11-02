@@ -3,6 +3,7 @@
 const FS = require('fs');
 const Path = require('path');
 const Spawn = require('child_process').spawn;
+const HTTPS = require('https');
 
 const SCRIPT_DIRECTORY = 'loom';
 
@@ -98,6 +99,71 @@ class Log {
 
 }
 
+class ShellCommand {
+
+  get command() { return null; }
+
+  /**
+   * @param {Executable} executable 
+   */
+  constructor(executable) {
+    this._executable = executable;
+  }
+
+  exe(...args) {
+    return this._executable.shell([this.command, ...args], null, {}, false);
+  }
+
+  exeShell(...args) {
+    return this._executable.shell([this.command, ...args], null, {}, false, false);
+  }
+
+  shell(...args) {
+    return this._executable.shell([this.command, ...args]);
+  }
+
+}
+
+class Git extends ShellCommand {
+
+  get command() {
+    return 'git';
+  }
+
+  currentHash() {
+    return this.exeShell('rev-parse', 'HEAD').then(data => data.output.trim());
+  }
+
+  currentBranch() {
+    return this.exeShell('branch', '--show-current').then(data => data.output.trim());
+  }
+
+}
+
+class Drush extends ShellCommand {
+
+  get command() {
+    return Path.normalize(this._executable.system.paths.drupal + '/vendor/bin/drush');
+  }
+
+  cr() {
+    return this.shell('cr');
+  }
+
+  db() {
+    return this.exe('eval "echo \\Drupal::database()->getConnectionOptions()[\'database\'];"').then(data => data.output);
+  }
+
+  cli(...args) {
+    return this.exeShell('sql-cli', ...args).then(data => console.log(data));
+  }
+
+  sqlSelect(query) {
+    return this._executable.shell(['echo', '"' + query + '"', '|', this.command, 'sql-cli'], null, {}, false, false);
+  }
+
+}
+
 class Executable {
 
   /**
@@ -106,6 +172,8 @@ class Executable {
    * @param {string} file 
    */
   constructor(system, name, file) {
+    this.drush = new Drush(this);
+    this.git = new Git(this);
     this.system = system;
     this.name = name;
     if (typeof file === 'string') {
@@ -202,19 +270,36 @@ class Executable {
     return this.system.execute(args);
   }
 
-  shell(args, cwd = null, listeners = {}, inherit = true) {
+  shell(args, cwd = null, listeners = {}, inherit = true, shell = true) {
     return new Promise((resolve, reject) => {
+      let output = '';
+      let error = '';
       const options = {
         cwd: cwd || this.system.paths.drupal || process.cwd(),
+        shell: true,
       };
       if (inherit) {
         options.stdio = 'inherit';
-        options.shell = true;
       }
-      const shellCommand = Spawn('sh', args, options);
+      let command = 'sh';
+      if (!shell) {
+        command = args.shift();
+      }
+      console.log(command, ...args);
+      const shellCommand = Spawn(command, args, options);
   
       for (const event in listeners) {
         shellCommand.on(event, listeners[event]);
+      }
+      if (shellCommand.stdout) {
+        shellCommand.stdout.on('data', (data) => {
+          output += data;
+        });
+      }
+      if (shellCommand.stderr) {
+        shellCommand.stderr.on('data', (data) => {
+          error += data;
+        });
       }
       if (listeners.error === undefined) {
         shellCommand.on('error', error => {
@@ -222,7 +307,7 @@ class Executable {
           reject(error);
         });
       }
-      shellCommand.on('close', code => resolve(code));
+      shellCommand.on('close', code => resolve({code, output, error}));
     });
   }
 
@@ -243,7 +328,9 @@ class Executable {
         }
       }
     }
-    return this.doRun();
+    return this.doRun().catch((error) => {
+      this.log.error(error.message || error || 'Unknown error');
+    });
   }
 
   doRun() {
@@ -372,45 +459,55 @@ class System {
 
 }
 
-// # Base commands
+// ###################
+// # native commands #
+// ###################
 
 /**
  * @this {Executable} 
  * @param {Function} resolve
  * @param {Function} reject
  */
-function addCommand(resolve) {
-  const [ name ] = this.args;
-  const file = this.path('extension', name + '.js');
+function addCommand(resolve, reject) {
+  const command = this.args.command;
+  const file = this.path('extension', command + '.js');
 
-  if (!name) {
-    this.log.error('The argument [!name] is required!', {'!name': 'name'});
-  } else if (this.system.commands[name] || FS.existsSync(file)) {
-    this.log.error('The command [!command] already exist.', {'!command': name});
+  if (this.system.commands[command] || FS.existsSync(file)) {
+    this.log.error('The command [!command] already exist.', {'!command': command});
   } else {
-    const content = [
-      '/**',
-      ' * @this {Executable}',
-      ' * @param {Function} resolve',
-      ' * @param {Function} reject',
-      ' */',
-      'module.exports = function(resolve, reject) {',
-      '  const [ ] = this.args;',
-      '  ',
-      '  this.log.note(\'New command [!command]\', {\'!command\': \'' + name + '\'});',
-      '};',
-      'module.exports.params = [];',
-      'module.exports.description = \'Description\';',
-    ];
-    FS.writeFile(file, content.join('\n'), () => {
-      this.log.note('Created command [!file]', {'!file': file});
-      resolve();
+    this.log.note('Request template from github ...');
+    return new Promise((resolve, reject) => {
+      const url = 'https://raw.githubusercontent.com/loomgmbh/node-losh/main/src/templates/' + this.args.template + '.js';
+      HTTPS.get(url, (response) => {
+        if (response.statusCode !== 200) {
+          return reject(response.statusCode + ' - ' + response.statusMessage + ' [' + url + ']');
+        }
+        let data = '';
+        
+        response.on('data', (chunk) => {
+          this.log.note('Get content (' + chunk.length + ' b) ...');
+          data += chunk;
+        });
+        response.on('end', () => {
+          this.log.note('Received data (' + data.length + ' b) ...');
+          resolve(data);
+        });
+      });
+    }).then((content) => {
+      this.log.note('Write command file ...');
+      FS.writeFile(file, content, () => {
+        this.log.success('Created command [!file]', {'!file': file});
+        resolve();
+      });
+    })
+    .catch((error) => {
+      return reject(error);
     });
   }
 };
 addCommand.params = [
-  ['!command-name', 'The command name of the new command.'],
-  ['!template', 'The template for the command.', null, 'command']
+  ['!command', 'The command name of the new command.'],
+  ['!template', 'The template for the command.', null, 'command'],
 ];
 addCommand.description = 'Create a new Command in this project.';
 
@@ -426,7 +523,7 @@ function debug(resolve) {
     }
   }
 
-  list('paths', exe.system.paths);
+  list('paths', this.system.paths);
 
   this.execute(['list', 'full']).then(resolve);
 };
@@ -437,7 +534,6 @@ function debug(resolve) {
  */
 function list(resolve) {
   const type = this.args.type;
-  console.log(this.args);
 
   function listCommands(title, commands) {
     if (type !== 'simple') console.log(title.toUpperCase());
@@ -459,7 +555,7 @@ function list(resolve) {
           if (executable.file) {
             output.push(executable.file);
           } else {
-            output.push('{native code}');
+            output.push('{native command}');
           }
         }
         console.log('\t', output.join(' - '));
@@ -475,7 +571,9 @@ list.params = [
 ];
 list.description = 'List all commands';
 
-// # Execution
+// #############
+// # Execution #
+// #############
 
 const system = new System(Path.dirname(__dirname));
 

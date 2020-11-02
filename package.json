@@ -1,0 +1,25 @@
+{
+  "name": "lash",
+  "version": "1.0.0",
+  "description": "",
+  "bin": {
+    "lash": "bin/lash.js"
+  },
+  "main": "bin/lash.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/loomgmbh/node-lash.git"
+  },
+  "author": "TerraZero",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/loomgmbh/node-lash/issues"
+  },
+  "homepage": "https://github.com/loomgmbh/node-lash#readme",
+  "devDependencies": {
+    "lash": "."
+  }
+}

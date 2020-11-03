@@ -6,6 +6,7 @@
 module.exports = function(resolve, reject) {
   this.log.note('New command [!command]', {'!command': this.name});
   
+  // {name}
 };
 module.exports.params = [];
 module.exports.description = 'Description';

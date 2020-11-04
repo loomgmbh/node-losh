@@ -7,6 +7,7 @@ const ShellExec = require('child_process').exec;
 const HTTPS = require('https');
 const OS = require('os');
 const Readline = require('readline');
+const { resolve } = require('path');
 
 let win = false;
 if (OS.version().toLowerCase().startsWith('win') || OS.type().toLowerCase().startsWith('win') || OS.platform().toLowerCase().startsWith('win')) {
@@ -127,16 +128,20 @@ class ShellCommand {
     }
   }
 
-  exe(...args) {
-    return this._executable.shell([this.getCommand(), ...args], null, {}, false);
-  }
-
-  exeShell(...args) {
-    return this._executable.shell([this.getCommand(), ...args], null, {}, false, false);
+  sh(...args) {
+    return this._executable.sh(args);
   }
 
   shell(...args) {
-    return this._executable.shell([this.getCommand(), ...args]);
+    return this._executable.shell(args);
+  }
+
+  execute(...args) {
+    return this.shell(this.getCommand(), ...args);
+  }
+
+  shExecute(...args) {
+    return this.sh(this.getCommand(), ...args);
   }
 
 }
@@ -147,12 +152,32 @@ class Git extends ShellCommand {
     return 'git';
   }
 
-  currentHash() {
-    return this.exeShell('rev-parse', 'HEAD').then(data => data.output.trim());
+  /**
+   * Channel for "git checkout <branch>".
+   * 
+   * @param {string} branch
+   * @returns {Promise}
+   */
+  checkout(branch) {
+    return this.shell(this.getCommand(), 'checkout', branch);
   }
 
-  currentBranch() {
-    return this.exeShell('branch', '--show-current').then(data => data.output.trim());
+  /**
+   * Get the current commit hash. Channel for "git rev-parse HEAD".
+   * 
+   * @returns {Promise<String>}
+   */
+  getCurrentHash() {
+    return this.shExecute('rev-parse', 'HEAD').then(data => data.out.trim());
+  }
+
+  /**
+   * Get the current branch. Channel for "git branch --show-current".
+   * 
+   * @returns {Promise<String>}
+   */
+  getCurrentBranch() {
+    return this.shExecute('branch', '--show-current').then(data => data.out.trim());
   }
 
 }
@@ -160,19 +185,30 @@ class Git extends ShellCommand {
 class Drush extends ShellCommand {
 
   get command() {
+    return '/s/code/loom/cdu/vendor/bin/drush';
     return this._executable.path('drupal', 'vendor/bin/drush');
   }
 
+  /**
+   * Channel for "drush cr"
+   * 
+   * @returns {Promise}
+   */
   cr() {
-    return this.shell('cr');
+    return this.execute('cr');
   }
 
-  db() {
-    return this.exe('eval "echo \\Drupal::database()->getConnectionOptions()[\'database\'];"').then(data => data.output);
+  /**
+   * Get the active database
+   * 
+   * @returns {Promise<String>}
+   */
+  getDB() {
+    return this.shExecute('eval "echo \\Drupal::database()->getConnectionOptions()[\'database\'];"').then(data => data.out);
   }
 
-  cli(...args) {
-    return this.exeShell('sql-cli', ...args).then(data => console.log(data));
+  sqlCli(arg) {
+    return this._executable.exec(['echo', arg, '|', '"' + this.getCommand() + '"', 'sql-cli'].join(' ')).then(data => console.log(data)).catch((e) => console.log(e));
   }
 
   sqlSelect(query) {
@@ -202,19 +238,35 @@ class Executable {
     }
   }
 
+  /**
+   * @returns {Log}
+   */
   get log() {
     return this.system.log;
   }
 
+  /**
+   * @returns {NodeRequire}
+   */
   get require() {
     return this.system.require;
   }
 
+  /**
+   * Returns the extname of the representing file. By native code it will return ".js".
+   * 
+   * @returns {String}
+   */
   get extname() {
     if (this.file === null) return '.js';
     return Path.extname(this.file);
   }
 
+  /**
+   * Returns the function if exist.
+   * 
+   * @returns {Function}
+   */
   get factory() { 
     if (this._factory === undefined) {
       if (this.extname === '.js') {
@@ -226,6 +278,11 @@ class Executable {
     return this._factory;
   }
 
+  /**
+   * Returns the parameter of the command.
+   * 
+   * @returns {Object[]}
+   */
   get params() {
     if (this._params === undefined) {
       this._params = [];
@@ -264,10 +321,20 @@ class Executable {
     return this._params;
   }
 
+  /**
+   * Returns the description of the command if exits.
+   * 
+   * @returns {String}
+   */
   get description() {
     return this.factory && this.factory.description || null;
   }
 
+  /**
+   * Returns a string for command to show an usage example.
+   * 
+   * @returns {String}
+   */
   get usage() {
     const output = ['lash', this.name];
 
@@ -279,57 +346,117 @@ class Executable {
     return output.join(' ');
   }
 
+  /**
+   * Create a path with a starting path. 
+   * 
+   * @param {string} cwd The base path [root, drupal, source]
+   * @param  {...any} paths 
+   * @returns {String}
+   */
   path(cwd = 'drupal', ...paths) {
     return Path.join(this.system.paths[cwd], ...paths);
   }
 
+  /**
+   * Execute a command with the launcher.
+   * 
+   * @param {String[]} args 
+   */
   execute(args) {
     return this.system.execute(args);
   }
 
-  shell(args, cwd = null, listeners = {}, inherit = true, shell = true) {
+  exec(command) {
+    ShellExec(command, (...args) => {
+      console.log(args);
+    });
+  }
+
+  /**
+   * Catch the output of a shell command.
+   * 
+   * @param {String[]} args 
+   * @param {String} cwd 
+   * @returns {Promise<Object>}
+   */
+  sh(args, cwd = null) {
     return new Promise((resolve, reject) => {
-      let output = '';
-      let error = '';
+      const data = {
+        out: '',
+        err: '',
+      };
       const options = {
         cwd: cwd || this.system.paths.drupal || process.cwd(),
         shell: true,
       };
-      if (inherit) {
-        options.stdio = 'inherit';
-      }
 
-      let shellCommand = null;
-      if (shell) {
-        shellCommand = ShellSpawn('sh', args, options);
-      } else {
-        console.log(args.join(' '));
-        shellCommand = ShellExec(args.join(' '), options);
-      }
-  
-      for (const event in listeners) {
-        shellCommand.on(event, listeners[event]);
-      }
-      if (shellCommand.stdout) {
-        shellCommand.stdout.on('data', (data) => {
-          output += data;
-        });
-      }
-      if (shellCommand.stderr) {
-        shellCommand.stderr.on('data', (data) => {
-          error += data;
-        });
-      }
-      if (listeners.error === undefined) {
-        shellCommand.on('error', error => {
-          this.system.log.error(error.message);
-          reject(error);
-        });
-      }
-      shellCommand.on('close', code => resolve({code, output, error}));
+      console.log(args.join(' '), options);
+      const command = ShellSpawn(args.shift(), args, options);
+
+      command.on('error', error => {
+        this.system.log.error(error.message);
+        reject({ error });
+      });
+
+      command.stdout.on('data', (chunk) => {
+        data.out += chunk;
+      });
+
+      command.stderr.on('data', (chunk) => {
+        data.err += chunk;
+      });
+
+      command.on('close', code => {
+        data.code = code;
+        if (code === 0) {
+          resolve(data)
+        } else {
+          data.error = new Error('Exit with code: ' + code);
+          reject(data);
+        }
+      });
     });
   }
 
+  /**
+   * Channel execution of shell command.
+   * 
+   * @param {String[]} args 
+   * @param {String} cwd 
+   * @returns {Promise<Object>}
+   */
+  shell(args, cwd = null) {
+    return new Promise((resolve, reject) => {
+      const options = {
+        cwd: cwd || this.system.paths.drupal || process.cwd(),
+        shell: true,
+        stdio: 'inherit',
+      };
+
+      console.log(args.join(' '), options);
+      const command = ShellSpawn(args.shift(), args, options);
+
+      command.on('error', error => {
+        this.system.log.error(error.message);
+        reject({ error });
+      });
+
+      command.on('close', code => {
+        if (code === 0) {
+          resolve({ code })
+        } else {
+          reject({ code, error: new Error('Exit with code: ' + code) });
+        }
+      });
+    });
+  }
+
+  /**
+   * Execute the command.
+   * 
+   * @param {String[]} args 
+   * @returns {Promise}
+   */
   run(args) {
     this._args = args;
     this.args = {
@@ -353,6 +480,11 @@ class Executable {
     });
   }
 
+  /**
+   * Execute the command.
+   * 
+   * @returns {Promise}
+   */
   doRun() {
     switch (this.extname) {
       case '.js':
@@ -360,13 +492,19 @@ class Executable {
           return this.factory.call(this, resolve, reject);
         });
       case '.sh':
-        return this.shell([this.file, ...this._args]);
+        return this.shell(['sh', this.file, ...this._args]);
       default: 
         this.log.error('The extname [@extname] is unknown.', {'@extname': this.extname});
         return Promise.reject();
     }
   }
 
+  /**
+   * HTTPS request a file.
+   * 
+   * @param {String} url 
+   * @returns {Promise<String>}
+   */
   request(url) {
     return new Promise((resolve, reject) => {
       this.log.note('Request [' + url + '] ...');
@@ -391,13 +529,27 @@ class Executable {
     });
   }
 
+  /**
+   * HTTPS request a file and replace placeholders.
+   * 
+   * @param {String} template 
+   * @param {Object<string, string>} placeholders 
+   * @returns {Promise<String>}
+   */
   template(template, placeholders = {}) {
     return this.request('https://raw.githubusercontent.com/loomgmbh/node-losh/' + VERSION + '/src/templates/' + template).then((content) => {
       this.log.note('Replace placeholders in template ...');
       for (const placeholder in placeholders) {
-        content = content.replace(new RegExp('/\\{' + placeholder + '\\}/', g), placeholders[placeholder]);
+        content = content.replace(new RegExp('\\{\\{' + placeholder + '\\}\\}', 'g'), placeholders[placeholder]);
       }
       return content;
+    });
+  }
+
+  form(name) {
+    return this.request('https://raw.githubusercontent.com/loomgmbh/node-losh/' + VERSION + '/src/forms/' + name + '.json').then((content) => {
+      const form = JSON.parse(content);
+      console.log(content);
     });
   }
 
@@ -509,7 +661,7 @@ class System {
       this._commands = {};
       this.initCommands(list);
       this.initCommands(debug);
-      this.initCommands(addCommand);
+      this.initCommands(createCommand);
       this.initCommands(version);
       if (this.paths.extension) {
         this.initCommands(this.paths.extension);
@@ -573,7 +725,7 @@ version.description = 'Show the current version.';
  * @param {Function} resolve
  * @param {Function} reject
  */
-function addCommand(resolve, reject) {
+function createCommand(resolve, reject) {
   const command = this.args.command;
   const file = this.path('extension', command + '.js');
 
@@ -581,7 +733,7 @@ function addCommand(resolve, reject) {
     this.log.error('The command [!command] already exist.', {'!command': command});
   } else {
     this.log.note('Request template from github ...');
-    return this.template(this.args.template + '.js', {name: 'cool'}).then((content) => {
+    return this.template(this.args.template + '.js').then((content) => {
       this.log.note('Write command file ...');
       FS.writeFile(file, content, () => {
         this.log.success('Created command [!file]', {'!file': file});
@@ -590,11 +742,11 @@ function addCommand(resolve, reject) {
     });
   }
 };
-addCommand.params = [
+createCommand.params = [
   ['!command', 'The command name of the new command.'],
   ['!template', 'The template for the command.', null, 'command'],
 ];
-addCommand.description = 'Create a new Command in this project.';
+createCommand.description = 'Create a new Command in this project.';
 
 /**
  * @this {Executable} 

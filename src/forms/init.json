@@ -1,0 +1,8 @@
+{
+  "template": "losh.json",
+  "path": "@drupal",
+  "name": ".losh.json",
+  "fields": [
+    ["theme", "Active theme"]
+  ]
+}

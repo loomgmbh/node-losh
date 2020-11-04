@@ -525,7 +525,7 @@ class Executable {
       });
     })
     .catch((error) => {
-      return reject(error);
+      return error;
     });
   }
 
@@ -561,7 +561,7 @@ class Executable {
         this.log.note(this.replace(form.description, bag));
       }
       return this.formFields(form, bag).then(() => {
-        return {form, bag};
+        return {form, bag, name};
       });
     });
   }
@@ -611,6 +611,38 @@ class Executable {
         return this.readlineWhile(text, condition);
       }
       return content;
+    });
+  }
+
+  readlineAccept(text) {
+    return this.readlineWhile(text + ' [y/n]: ', (content) => {
+      if (content !== 'y' && content !== 'n') return 'Please use "y" for yes and "n" for no.';
+      return true;
+    }).then((content) => {
+      return content === 'y';
+    });
+  }
+
+  write(path, content) {
+    this.log.note('Write file [' + path + '] ...');
+    return new Promise((resolve, reject) => {
+      if (FS.existsSync(path)) {
+        this.log.warn('File already exist ...');
+        this.readlineAccept('Do you want to overwrite the file?').then((accept) => {
+          if (accept) {
+            FS.writeFile(path, content, () => {
+              resolve({path, content, created: true});
+            });
+          } else {
+            this.log.error('Abort!');
+            resolve({path, content, created: false});
+          }
+        });
+      } else {
+        FS.writeFile(path, content, () => {
+          resolve({path, content, created: true});
+        });
+      }
     });
   }
 
@@ -684,9 +716,8 @@ class System {
       this._commands = {};
       this.initCommands(list);
       this.initCommands(debug);
-      this.initCommands(createCommand);
       this.initCommands(version);
-      this.initCommands(form);
+      this.initCommands(generate);
       if (this.paths.extension) {
         this.initCommands(this.paths.extension);
       }
@@ -749,53 +780,25 @@ version.description = 'Show the current version.';
  * @param {Function} resolve
  * @param {Function} reject
  */
-function form(resolve, reject) {
-  this.form(this.args.form).then((data) => {
-    console.log(data);
-    return;
-    return this.template(form.template, bag).then((content) => {
-      const path = this.replace(Path.normalize(form.path), bag);
-      this.log.note('Write file [' + path + '] ...');
-      return new Promise((resolve) => {
-        FS.writeFile(path, content, () => {
-          resolve({form, bag, path, content});
-        });
+function generate(resolve, reject) {
+  this.form('generate/' + this.args.name).then((data) => {
+    return this.template(data.form.template, data.bag).then((content) => {
+      const path = this.replace(Path.normalize(data.form.path), data.bag);
+      this.readlineAccept('Write file [' + path + ']').then((accept) => {
+        if (accept) {
+          return this.write(path, content);
+        } else {
+          this.log.note('Abort!');
+          resolve();
+        }
       });
     });
   });
 };
-form.params = [
-  ['form']
+generate.params = [
+  ['name']
 ];
-form.description = 'Execute a form.';
-
-/**
- * @this {Executable} 
- * @param {Function} resolve
- * @param {Function} reject
- */
-function createCommand(resolve, reject) {
-  const command = this.args.command;
-  const file = this.path('extension', command + '.js');
-
-  if (this.system.commands[command] || FS.existsSync(file)) {
-    this.log.error('The command [!command] already exist.', {'!command': command});
-  } else {
-    this.log.note('Request template from github ...');
-    return this.template(this.args.template + '.js').then((content) => {
-      this.log.note('Write command file ...');
-      FS.writeFile(file, content, () => {
-        this.log.success('Created command [!file]', {'!file': file});
-        resolve();
-      });
-    });
-  }
-};
-createCommand.params = [
-  ['!command', 'The command name of the new command.'],
-  ['!template', 'The template for the command.', null, 'command'],
-];
-createCommand.description = 'Create a new Command in this project.';
+generate.description = 'Generate a file.';
 
 /**
  * @this {Executable} 

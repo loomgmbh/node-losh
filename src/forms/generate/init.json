@@ -3,7 +3,6 @@
   "path": "@extension/.losh.json",
   "description": "Generate losh.json in project",
   "fields": [
-    ["theme", "Active theme", "Theme: {{theme}}"],
-    ["cool", "{{theme}} hier"]
+    ["theme", "Active theme"]
   ]
 }

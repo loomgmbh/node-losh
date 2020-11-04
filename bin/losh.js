@@ -529,6 +529,16 @@ class Executable {
     });
   }
 
+  replace(content, bag = {}) {
+    for (const item in bag) {
+      content = content.replace(new RegExp('\\{\\{' + item + '\\}\\}', 'g'), bag[item]);
+    }
+    for (const path in this.system.paths) {
+      content = content.replace(new RegExp('@' + path, 'g'), this.system.paths[path]);
+    }
+    return content;
+  }
+
   /**
    * HTTPS request a file and replace placeholders.
    * 
@@ -539,17 +549,30 @@ class Executable {
   template(template, placeholders = {}) {
     return this.request('https://raw.githubusercontent.com/loomgmbh/node-losh/' + VERSION + '/src/templates/' + template).then((content) => {
       this.log.note('Replace placeholders in template ...');
-      for (const placeholder in placeholders) {
-        content = content.replace(new RegExp('\\{\\{' + placeholder + '\\}\\}', 'g'), placeholders[placeholder]);
-      }
-      return content;
+      return this.replace(content, placeholders);
     });
   }
 
   form(name) {
     return this.request('https://raw.githubusercontent.com/loomgmbh/node-losh/' + VERSION + '/src/forms/' + name + '.json').then((content) => {
       const form = JSON.parse(content);
-      console.log(content);
+      const bag = {};
+      if (form.description) {
+        this.log.note(this.replace(form.description, bag));
+      }
+      return this.formFields(form, bag).then(() => {
+        return {form, bag};
+      });
+    });
+  }
+
+  formFields(form, bag, count = 0) {
+    if (form.fields[count] === undefined) return Promise.resolve(bag);
+    return this.readline('[' + (count + 1) + '/' + form.fields.length + '] ' + this.replace(form.fields[count][1], bag) + ': ').then((content) => {
+      const transformer = form.fields[count][2] || '{{' + form.fields[count][0] + '}}'
+      bag[form.fields[count][0]] = content;
+      bag[form.fields[count][0]] = this.replace(transformer, bag);
+      return this.formFields(form, bag, count + 1);
     });
   }
 
@@ -727,7 +750,19 @@ version.description = 'Show the current version.';
  * @param {Function} reject
  */
 function form(resolve, reject) {
-  this.form(this.args.form);
+  this.form(this.args.form).then((data) => {
+    console.log(data);
+    return;
+    return this.template(form.template, bag).then((content) => {
+      const path = this.replace(Path.normalize(form.path), bag);
+      this.log.note('Write file [' + path + '] ...');
+      return new Promise((resolve) => {
+        FS.writeFile(path, content, () => {
+          resolve({form, bag, path, content});
+        });
+      });
+    });
+  });
 };
 form.params = [
   ['form']

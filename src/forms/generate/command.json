@@ -1,0 +1,9 @@
+{
+  "template": "command.js",
+  "path": "@extension/{{name}}.js",
+  "description": "Create a custom command",
+  "fields": [
+    ["name", "Name"],
+    ["description", "Description"]
+  ]
+}

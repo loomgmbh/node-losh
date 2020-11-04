@@ -1,8 +1,7 @@
 {
   "template": "losh.json",
-  "path": "@drupal",
-  "name": ".losh.json",
-  "description": "Hallo",
+  "path": "@extension/.losh.json",
+  "description": "Generate losh.json in project",
   "fields": [
     ["theme", "Active theme", "Theme: {{theme}}"],
     ["cool", "{{theme}} hier"]

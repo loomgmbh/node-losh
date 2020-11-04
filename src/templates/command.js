@@ -8,4 +8,4 @@ module.exports = function(resolve, reject) {
   
 };
 module.exports.params = [];
-module.exports.description = 'Description';
+module.exports.description = '{{description}}';

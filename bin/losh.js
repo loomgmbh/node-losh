@@ -145,6 +145,27 @@ class ShellCommand {
 
 }
 
+class Node extends ShellCommand {
+
+  get command() {
+    return 'node';
+  }
+
+  version() {
+    return this.shExecute('-v').then(data => {
+      const matches = data.out.match(/(\d+)\.(\d+)\.(\d+)/);
+
+      return {
+        full: matches[0],
+        major: matches[1],
+        minor: matches[2],
+        patch: matches[3],
+      };
+    });
+  }
+
+}
+
 class Git extends ShellCommand {
 
   get command() {
@@ -269,6 +290,7 @@ class Executable {
     this.drush = new Drush(this);
     this.git = new Git(this);
     this.composer = new Composer(this);
+    this.node = new Node(this);
     this.system = system;
     this.name = name;
     if (typeof file === 'string') {
@@ -605,7 +627,7 @@ class Executable {
         promise = promise.then(factory.bind(null, list[index], index));
       }
     }
-    return promise;
+    return promise || Promise.resolve();
   }
 
   form(name) {
@@ -620,8 +642,9 @@ class Executable {
           const transformer = field[2] || '{{' + field[0] + '}}'
           bag[field[0]] = content;
           bag[field[0]] = this.replace(transformer, bag);
-          return {form, bag};
         });
+      }).then(() => {
+        return {form, bag};
       });
     });
   }

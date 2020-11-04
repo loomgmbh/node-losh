@@ -8,10 +8,7 @@ const HTTPS = require('https');
 const OS = require('os');
 const Readline = require('readline');
 
-let win = false;
-if (OS.version && OS.version().toLowerCase().startsWith('win') || OS.type().toLowerCase().startsWith('win') || OS.platform().toLowerCase().startsWith('win')) {
-  win = true;
-}
+const win = OS.platform() === 'win32';
 
 const SCRIPT_DIRECTORY = 'loom';
 const VERSION = 'main';

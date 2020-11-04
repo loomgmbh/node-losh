@@ -663,6 +663,7 @@ class System {
       this.initCommands(debug);
       this.initCommands(createCommand);
       this.initCommands(version);
+      this.initCommands(form);
       if (this.paths.extension) {
         this.initCommands(this.paths.extension);
       }
@@ -719,6 +720,19 @@ function version(resolve, reject) {
 };
 version.params = [];
 version.description = 'Show the current version.';
+
+/**
+ * @this {Executable} 
+ * @param {Function} resolve
+ * @param {Function} reject
+ */
+function form(resolve, reject) {
+  this.form(this.args.form);
+};
+form.params = [
+  ['form']
+];
+form.description = 'Execute a form.';
 
 /**
  * @this {Executable} 

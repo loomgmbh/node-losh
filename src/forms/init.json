@@ -2,7 +2,9 @@
   "template": "losh.json",
   "path": "@drupal",
   "name": ".losh.json",
+  "description": "Hallo",
   "fields": [
-    ["theme", "Active theme"]
+    ["theme", "Active theme", "Theme: {{theme}}"],
+    ["cool", "{{theme}} hier"]
   ]
 }

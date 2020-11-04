@@ -94,6 +94,7 @@ class Log {
   error(message, playeholders = {}) {
     message = '[ERROR]: ' + message;
     console.error(this.replace(this.color.red(message), playeholders));
+    return new Error(message);
   }
 
   success(message, playeholders = {}) {
@@ -319,7 +320,7 @@ class Executable {
   /**
    * Returns the extname of the representing file. By native code it will return ".js".
    * 
-   * @returns {String}
+   * @returns {string}
    */
   get extname() {
     if (this.file === null) return '.js';
@@ -388,7 +389,7 @@ class Executable {
   /**
    * Returns the description of the command if exits.
    * 
-   * @returns {String}
+   * @returns {string}
    */
   get description() {
     return this.factory && this.factory.description || null;
@@ -397,7 +398,7 @@ class Executable {
   /**
    * Returns a string for command to show an usage example.
    * 
-   * @returns {String}
+   * @returns {string}
    */
   get usage() {
     const output = ['lash', this.name];
@@ -414,8 +415,8 @@ class Executable {
    * Create a path with a starting path. 
    * 
    * @param {string} cwd The base path [root, drupal, source]
-   * @param  {...any} paths 
-   * @returns {String}
+   * @param  {...string} paths 
+   * @returns {string}
    */
   path(cwd = 'drupal', ...paths) {
     return Path.join(this.system.paths[cwd], ...paths);
@@ -424,7 +425,7 @@ class Executable {
   /**
    * Execute a command with the launcher.
    * 
-   * @param {String[]} args 
+   * @param {string[]} args 
    */
   execute(args) {
     return this.system.execute(args);
@@ -439,8 +440,8 @@ class Executable {
   /**
    * Catch the output of a shell command.
    * 
-   * @param {String[]} args 
-   * @param {String} cwd 
+   * @param {string[]} args 
+   * @param {string} cwd 
    * @returns {Promise<Object>}
    */
   sh(args, cwd = null) {
@@ -485,8 +486,8 @@ class Executable {
   /**
    * Channel execution of shell command.
    * 
-   * @param {String[]} args 
-   * @param {String} cwd 
+   * @param {string[]} args 
+   * @param {string} cwd 
    * @returns {Promise<Object>}
    */
   shell(args, cwd = null) {
@@ -518,10 +519,15 @@ class Executable {
   /**
    * Execute the command.
    * 
-   * @param {String[]} args 
-   * @returns {Promise}
+   * @param {string[]} args 
+   * @returns {Promise<RunResult>}
+   * 
+   * @typedef {Object} RunResult
+   * @property {string[]} args
+   * @property {Executable} executable
+   * @property {Error} [error]
    */
-  run(args) {
+  async run(args) {
     this._args = args;
     this.args = {
       _: [],
@@ -531,68 +537,65 @@ class Executable {
         if (this.params[i]) {
           this.args[this.params[i].name] = args[i] || this.params[i].fallback;
           if (this.params[i].required && this.args[this.params[i].name] === null) {
-            this.log.error('The argument [!argument] is required!', {'!argument': this.params[i].name});
-            return Promise.reject();
+            return {args, executable: this, error: this.log.error('The argument [!argument] is required!', {'!argument': this.params[i].name})};
           }
         } else {
           this.args._.push(args[i]);
         }
       }
     }
-    return this.doRun().catch((error) => {
-      this.log.error(error.message || error || 'Unknown error');
-    });
-  }
-
-  /**
-   * Execute the command.
-   * 
-   * @returns {Promise}
-   */
-  doRun() {
+    
     switch (this.extname) {
       case '.js':
-        return new Promise((resolve, reject) => {
-          return this.factory.call(this, resolve, reject);
-        });
+        const data = (await this.factory.call(this)) || {};
+
+        data.args = args;
+        data.executable = this;
+        return data;
       case '.sh':
         return this.shell(['sh', this.file, ...this._args]);
       default: 
-        this.log.error('The extname [@extname] is unknown.', {'@extname': this.extname});
-        return Promise.reject();
+        return {args, executable: this, error: this.log.error('The extname [@extname] is unknown.', {'@extname': this.extname})};
     }
   }
 
   /**
    * HTTPS request a file.
    * 
-   * @param {String} url 
-   * @returns {Promise<String>}
+   * @param {string} url 
+   * @returns {Promise<RequestResult>}
+   * 
+   * @typedef {Object} RequestResult
+   * @property {string} content
+   * @property {string} url
+   * @property {Error} [error]
    */
   request(url) {
     return new Promise((resolve, reject) => {
       this.log.note('Request [' + url + '] ...');
       HTTPS.get(url, (response) => {
         if (response.statusCode !== 200) {
-          return reject(response.statusCode + ' - ' + response.statusMessage + ' [' + url + ']');
+          return reject({url, error: this.log.error(response.statusCode + ' - ' + response.statusMessage + ' [' + url + ']')});
         }
-        let data = '';
+        let content = '';
         
         response.on('data', (chunk) => {
           this.log.note('Get content (' + chunk.length + ' b) ...');
-          data += chunk;
+          content += chunk;
         });
         response.on('end', () => {
-          this.log.note('Received data (' + data.length + ' b) ...');
-          resolve(data);
+          this.log.note('Received data (' + content.length + ' b) ...');
+          resolve({content, url});
         });
       });
-    })
-    .catch((error) => {
-      return error;
     });
   }
 
+  /**
+   * @param {string} content 
+   * @param {Object<string, string>} bag 
+   * @returns {string}
+   */
   replace(content, bag = {}) {
     for (const item in bag) {
       content = content.replace(new RegExp('\\{\\{' + item + '\\}\\}', 'g'), bag[item]);
@@ -604,65 +607,74 @@ class Executable {
   }
 
   /**
-   * HTTPS request a file and replace placeholders.
+   * HTTPS request a template and replace placeholders.
    * 
-   * @param {String} template 
+   * @param {string} template 
    * @param {Object<string, string>} placeholders 
    * @returns {Promise<String>}
    */
-  template(template, placeholders = {}) {
-    return this.request('https://raw.githubusercontent.com/loomgmbh/node-losh/' + VERSION + '/src/templates/' + template).then((content) => {
-      this.log.note('Replace placeholders in template ...');
-      return this.replace(content, placeholders);
-    });
+  async template(template, placeholders = {}) {
+    const data = await this.request('https://raw.githubusercontent.com/loomgmbh/node-losh/' + VERSION + '/src/templates/' + template);
+    this.log.note('Replace placeholders in template ...');
+    return this.replace(data.content, placeholders);
   }
 
-  for(list, factory = null) {
-    factory = factory || function(value) {return value();};
-    let promise = null;
-    for (const index in list) {
-      if (promise === null) {
-        promise = factory(list[index], index);
-      } else {
-        promise = promise.then(factory.bind(null, list[index], index));
-      }
+  /**
+   * Execute a formular JSON.
+   * 
+   * @param {string} name 
+   * @returns {Promise<FormResult>}
+   * 
+   * @typedef {Object} FormResult
+   * @property {string} name
+   * @property {LoshForm} form
+   * @property {Object<string, string>} bag
+   * @property {Error} [error]
+   * 
+   * @typedef {Object} LoshForm
+   * @property {string} description
+   * @property {string[]} fields
+   * @property {Object<string, string>} files
+   */
+  async form(name) {
+    const data = await this.request('https://raw.githubusercontent.com/loomgmbh/node-losh/' + VERSION + '/src/forms/' + name + '.json');
+    if (data.error) return {name, error: data.error};
+    const form = JSON.parse(data.content);
+    const bag = {};
+
+    if (form.description) {
+      this.log.note(this.replace(form.description, bag));
     }
-    return promise || Promise.resolve();
-  }
 
-  form(name) {
-    return this.request('https://raw.githubusercontent.com/loomgmbh/node-losh/' + VERSION + '/src/forms/' + name + '.json').then((content) => {
-      const form = JSON.parse(content);
-      const bag = {};
-      if (form.description) {
-        this.log.note(this.replace(form.description, bag));
-      }
-      return this.for(form.fields, (field, index) => {
-        return this.readline('[' + (parseInt(index) + 1) + '/' + form.fields.length + '] ' + this.replace(field[1], bag) + ': ').then((content) => {
-          const transformer = field[2] || '{{' + field[0] + '}}'
-          bag[field[0]] = content;
-          bag[field[0]] = this.replace(transformer, bag);
-        });
-      }).then(() => {
-        return {form, bag};
-      });
-    });
+    for (const index in form.fields) {
+      const input = await this.readlineWhile('[' + (parseInt(index) + 1) + '/' + form.fields.length + '] ' + this.replace(form.fields[index][1], bag) + ': ', true);
+      if (input.error) return {name, form, bag, error: input.error};
+      const transformer = form.fields[index][2] || '{{' + form.fields[index][0] + '}}'
+      bag[form.fields[index][0]] = input.answer;
+      bag[form.fields[index][0]] = this.replace(transformer, bag);
+    }
+    return {name, form, bag};
   }
 
   /**
    * Get an input from the user.
    * 
-   * @param {String} text 
+   * @param {string} text
+   * @returns {Promise<ReadlineResult>}
+   * 
+   * @typedef {Object} ReadlineResult
+   * @property {string} answer
+   * @property {Error} [error]
    */
   readline(text) {
     const rl = Readline.createInterface({
       input: process.stdin,
       output: process.stdout, 
     });
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       rl.question(text, (answer) => {
         rl.close();
-        resolve(answer);
+        resolve({answer});
       });
     });
   }
@@ -670,53 +682,85 @@ class Executable {
   /**
    * Get an Input from the user, repeat if failed the check.
    * 
-   * @param {String} text 
-   * @param {Function} condition 
+   * @param {string} text 
+   * @param {(ReadlineCondition|string|boolean)} condition 
+   * @returns {Promise<ReadlineResult>}
+   * 
+   * @callback ReadlineCondition
+   * @param {ReadlineResult} input
+   * @returns {(boolean|string)}
    */
-  readlineWhile(text, condition) {
-    return this.readline(text).then((content) => {
-      const check = condition(content);
-
+  async readlineWhile(text, condition = false) {
+    if (typeof condition !== 'function' && condition !== false) {
+      const failure = (typeof condition === 'string' ? condition : 'Require input!');
+      condition = (input) => {
+        if (!input.answer.length) return failure;
+        return true;
+      };
+    } else if (condition === false) {
+      condition = () => {return true;};
+    }
+    let input = null;
+    let check = null;
+    do {
+      input = await this.readline(text);
+      if (input.error) return input;
+      check = condition(input);
       if (typeof check === 'string') {
         this.log.error(check);
-        return this.readlineWhile(text, condition);
       } else if (!check) {
-        return this.readlineWhile(text, condition);
+        this.log.error('Invalid input.');
       }
-      return content;
-    });
+    } while (check !== true);
+    return input;
   }
 
-  readlineAccept(text) {
-    return this.readlineWhile(text + ' [y/n]: ', (content) => {
-      if (content !== 'y' && content !== 'n') return 'Please use "y" for yes and "n" for no.';
+  /**
+   * Request a consent from the user.
+   * 
+   * @param {string} text 
+   * @returns {boolean}
+   */
+  async readlineAccept(text) {
+    const input = await this.readlineWhile(text + ' [y/n]: ', (input) => {
+      if (input.answer !== 'y' && input.answer !== 'n') return 'Please use "y" for yes and "n" for no.';
       return true;
-    }).then((content) => {
-      return content === 'y';
     });
+    if (input.error) throw input.error;
+    return input.answer === 'y';
   }
 
-  write(path, content, force = false) {
-    this.log.note('Write file [' + path + '] ...');
-    return new Promise((resolve, reject) => {
+  /**
+   * Write a file.
+   * 
+   * @param {string} path 
+   * @param {string} content 
+   * @param {boolean} force 
+   * @returns {Promise<WriteResult>}
+   * 
+   * @typedef {Object} WriteResult
+   * @property {string} path
+   * @property {string} content
+   * @property {boolean} force
+   * @property {boolean} consent
+   * @property {Error} [error]
+   */
+  async write(path, content, force = false) {
+    try {
+      this.log.note('Write file [' + path + '] ...');
+      let consent = false;
       if (!force && FS.existsSync(path)) {
-        this.log.warn('File already exist ...');
-        this.readlineAccept('Do you want to overwrite the file?').then((accept) => {
-          if (accept) {
-            FS.writeFile(path, content, () => {
-              resolve({path, content, created: true});
-            });
-          } else {
-            this.log.error('Abort!');
-            resolve({path, content, created: false});
-          }
-        });
-      } else {
-        FS.writeFile(path, content, () => {
-          resolve({path, content, created: true});
-        });
+        consent = await this.readlineAccept('Do you want to overwrite the file?');
+        if (!consent) {
+          return {path, content, force, consent, error: this.log.error('No user consent to overwrite. Abort!')};
+        }
       }
-    });
+    
+      FS.writeFileSync(path, content);
+      return {path, content, force, consent};
+    } catch (error) {
+      return {path, content, force, consent, error};
+    }
   }
 
 }
@@ -816,19 +860,16 @@ class System {
     return new Executable(this, name, this.commands[name]);
   }
 
-  execute(args) {
+  async execute(args) {
     const name = args.shift();
 
     if (this.commands[name]) {
-      return this.doExecute(name, args);
+      return this.getExecutable(name).run(args);
     } else {
-      this.log.error('Command [@command] not found!', {'@command': name});
-      return this.doExecute('list', args);
+      const data = await this.getExecutable('list').run(args);
+      data.error = this.log.error('Command [@command] not found!', {'@command': name});
+      return data;
     }
-  }
-
-  doExecute(name, args) {
-    return this.getExecutable(name).run(args);
   }
 
 }
@@ -838,11 +879,9 @@ class System {
 // ###################
 
 /**
- * @this {Executable} 
- * @param {Function} resolve
- * @param {Function} reject
+ * @this {Executable}
  */
-function version(resolve, reject) {
+function version() {
   this.log.note('Version: ' + VERSION);
 };
 version.params = [];
@@ -850,25 +889,38 @@ version.description = 'Show the current version.';
 
 /**
  * @this {Executable} 
- * @param {Function} resolve
- * @param {Function} reject
  */
-function generate(resolve, reject) {
-  this.form('generate/' + this.args.name).then((data) => {
-    return this.for(data.form.files, (template, path) => {
-      return this.template(template, data.bag).then((content) => {
-        const file = this.replace(Path.normalize(path), data.bag);
-        this.readlineAccept('Write file [' + file + ']').then((accept) => {
-          if (accept) {
-            return this.write(file, content);
-          } else {
-            this.log.note('Abort!');
-            resolve();
-          }
-        });
-      });
-    });
-  });
+async function generate() {
+  try {
+    const form = await this.form('generate/' + this.args.name);
+
+    const files = {};
+    for (const path in form.form.files) {
+      const template = await this.template(form.form.files[path], form.bag);
+      files[this.replace(Path.normalize(path), form.bag)] = template;
+    }
+    this.log.note('Would generate this files:');
+    for (const file in files) {
+      if (FS.existsSync(file)) {
+        this.log.warn('Exists ' + file);
+      } else {
+        this.log.note(file);
+      }
+    }
+    const accept = await this.readlineAccept('Write file');
+    if (accept) {
+      for (const file in files) {
+        const result = await this.write(file, files[file], true);
+        if (result.error) return;
+      }
+    } else {
+      this.log.error('No consent. Abort!');
+      return;
+    }
+  } catch (error) {
+    this.log.error(error.message);
+    return {error};
+  }
 };
 generate.params = [
   ['name']

@@ -1,0 +1,7 @@
+{
+  "description": "Generate base scripts for project",
+  "fields": [],
+  "files": {
+    "@extension/deploy.js": "deploy.js"
+  }
+}

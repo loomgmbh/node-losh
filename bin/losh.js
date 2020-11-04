@@ -7,7 +7,6 @@ const ShellExec = require('child_process').exec;
 const HTTPS = require('https');
 const OS = require('os');
 const Readline = require('readline');
-const { resolve } = require('path');
 
 let win = false;
 if (OS.version().toLowerCase().startsWith('win') || OS.type().toLowerCase().startsWith('win') || OS.platform().toLowerCase().startsWith('win')) {
@@ -185,7 +184,6 @@ class Git extends ShellCommand {
 class Drush extends ShellCommand {
 
   get command() {
-    return '/s/code/loom/cdu/vendor/bin/drush';
     return this._executable.path('drupal', 'vendor/bin/drush');
   }
 
@@ -196,6 +194,32 @@ class Drush extends ShellCommand {
    */
   cr() {
     return this.execute('cr');
+  }
+
+  /**
+   * Channel for "drush cim"
+   * 
+   * @param {Boolean} force "drush cim -y"
+   */
+  cim(force) {
+    if (force) {
+      return this.execute('cim', '-y');
+    } else {
+      return this.execute('cim');
+    }
+  }
+
+  /**
+   * Channel for "drush cex"
+   * 
+   * @param {Boolean} force "drush cex -y"
+   */
+  cex(force) {
+    if (force) {
+      return this.execute('cex', '-y');
+    } else {
+      return this.execute('cex');
+    }
   }
 
   /**
@@ -217,6 +241,23 @@ class Drush extends ShellCommand {
 
 }
 
+class Composer extends ShellCommand {
+
+  get command() {
+    return 'composer';
+  }
+
+  /**
+   * Channel for "composer install"
+   * 
+   * @returns {Promise}
+   */
+  install() {
+    return this.execute('install');
+  }
+
+}
+
 class Executable {
 
   /**
@@ -227,6 +268,7 @@ class Executable {
   constructor(system, name, file) {
     this.drush = new Drush(this);
     this.git = new Git(this);
+    this.composer = new Composer(this);
     this.system = system;
     this.name = name;
     if (typeof file === 'string') {
@@ -553,12 +595,17 @@ class Executable {
     });
   }
 
-  for(list, promise, current = null) {
-    const promises = [];
+  for(list, factory = null) {
+    factory = factory || function(value) {return value();};
+    let promise = null;
     for (const index in list) {
-      promises.push(promise.bind(null, list[index], index));
+      if (promise === null) {
+        promise = factory(list[index], index);
+      } else {
+        promise = promise.then(factory.bind(null, list[index], index));
+      }
     }
-    return promises.reduce((bag, func) => func());
+    return promise;
   }
 
   form(name) {
@@ -568,19 +615,14 @@ class Executable {
       if (form.description) {
         this.log.note(this.replace(form.description, bag));
       }
-      return this.formFields(form, bag).then(() => {
-        return {form, bag, name};
+      return this.for(form.fields, (field, index) => {
+        return this.readline('[' + (parseInt(index) + 1) + '/' + form.fields.length + '] ' + this.replace(field[1], bag) + ': ').then((content) => {
+          const transformer = field[2] || '{{' + field[0] + '}}'
+          bag[field[0]] = content;
+          bag[field[0]] = this.replace(transformer, bag);
+          return {form, bag};
+        });
       });
-    });
-  }
-
-  formFields(form, bag, count = 0) {
-    if (form.fields[count] === undefined) return Promise.resolve(bag);
-    return this.readline('[' + (count + 1) + '/' + form.fields.length + '] ' + this.replace(form.fields[count][1], bag) + ': ').then((content) => {
-      const transformer = form.fields[count][2] || '{{' + form.fields[count][0] + '}}'
-      bag[form.fields[count][0]] = content;
-      bag[form.fields[count][0]] = this.replace(transformer, bag);
-      return this.formFields(form, bag, count + 1);
     });
   }
 
@@ -631,10 +673,10 @@ class Executable {
     });
   }
 
-  write(path, content) {
+  write(path, content, force = false) {
     this.log.note('Write file [' + path + '] ...');
     return new Promise((resolve, reject) => {
-      if (FS.existsSync(path)) {
+      if (!force && FS.existsSync(path)) {
         this.log.warn('File already exist ...');
         this.readlineAccept('Do you want to overwrite the file?').then((accept) => {
           if (accept) {
@@ -790,18 +832,17 @@ version.description = 'Show the current version.';
  */
 function generate(resolve, reject) {
   this.form('generate/' + this.args.name).then((data) => {
-    return this.for(data.form.files, (value, index) => {
-      console.log(value, index);
-    });
-    return this.template(data.form.template, data.bag).then((content) => {
-      const path = this.replace(Path.normalize(data.form.path), data.bag);
-      this.readlineAccept('Write file [' + path + ']').then((accept) => {
-        if (accept) {
-          return this.write(path, content);
-        } else {
-          this.log.note('Abort!');
-          resolve();
-        }
+    return this.for(data.form.files, (template, path) => {
+      return this.template(template, data.bag).then((content) => {
+        const file = this.replace(Path.normalize(path), data.bag);
+        this.readlineAccept('Write file [' + file + ']').then((accept) => {
+          if (accept) {
+            return this.write(file, content);
+          } else {
+            this.log.note('Abort!');
+            resolve();
+          }
+        });
       });
     });
   });
@@ -809,7 +850,7 @@ function generate(resolve, reject) {
 generate.params = [
   ['name']
 ];
-generate.description = 'Generate a file.';
+generate.description = 'Generator command.';
 
 /**
  * @this {Executable} 

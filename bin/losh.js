@@ -9,7 +9,7 @@ const OS = require('os');
 const Readline = require('readline');
 
 let win = false;
-if (OS.version().toLowerCase().startsWith('win') || OS.type().toLowerCase().startsWith('win') || OS.platform().toLowerCase().startsWith('win')) {
+if (OS.version && OS.version().toLowerCase().startsWith('win') || OS.type().toLowerCase().startsWith('win') || OS.platform().toLowerCase().startsWith('win')) {
   win = true;
 }
 

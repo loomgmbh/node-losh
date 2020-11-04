@@ -1,8 +1,9 @@
 {
-  "template": "losh.json",
-  "path": "@extension/.losh.json",
   "description": "Generate losh.json in project",
   "fields": [
     ["theme", "Active theme"]
-  ]
+  ],
+  "files": {
+    "@extension/.losh.json": "losh.json"
+  }
 }

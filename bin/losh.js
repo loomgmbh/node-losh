@@ -553,6 +553,14 @@ class Executable {
     });
   }
 
+  for(list, promise, current = null) {
+    const promises = [];
+    for (const index in list) {
+      promises.push(promise.bind(null, list[index], index));
+    }
+    return promises.reduce((bag, func) => func());
+  }
+
   form(name) {
     return this.request('https://raw.githubusercontent.com/loomgmbh/node-losh/' + VERSION + '/src/forms/' + name + '.json').then((content) => {
       const form = JSON.parse(content);
@@ -782,6 +790,9 @@ version.description = 'Show the current version.';
  */
 function generate(resolve, reject) {
   this.form('generate/' + this.args.name).then((data) => {
+    return this.for(data.form.files, (value, index) => {
+      console.log(value, index);
+    });
     return this.template(data.form.template, data.bag).then((content) => {
       const path = this.replace(Path.normalize(data.form.path), data.bag);
       this.readlineAccept('Write file [' + path + ']').then((accept) => {

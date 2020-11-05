@@ -4,9 +4,11 @@ const FS = require('fs');
 const Path = require('path');
 const ShellSpawn = require('child_process').spawn;
 const ShellExec = require('child_process').exec;
+const ShellExecFile = require('child_process').execFile;
 const HTTPS = require('https');
 const OS = require('os');
 const Readline = require('readline');
+const { errorMonitor } = require('stream');
 
 const win = OS.platform() === 'win32';
 
@@ -68,40 +70,51 @@ class Log {
     return '\u001b[' + code[0] + 'm' + (code[2] || '') + string + (code[2] || '') + '\u001b[' + code[1] + 'm';
   }
 
-  replace(message, playeholders = {}) {
-    for (const index in playeholders) {
+  replace(message, placeholders = {}) {
+    for (const index in placeholders) {
       if (this.logs[index[0]] === undefined) {
-        message = message.replace(new RegExp('\\[' + index + '\\]', 'g'), playeholders[index]);
+        message = message.replace(new RegExp('\\[' + index + '\\]', 'g'), placeholders[index]);
       } else {
-        message = message.replace(new RegExp('\\[' + index + '\\]', 'g'), this.insertStyle(message, this.logs[index[0]](playeholders[index])));
+        message = message.replace(new RegExp('\\[' + index + '\\]', 'g'), this.insertStyle(message, this.logs[index[0]](placeholders[index])));
       }
     }
     return message;
   }
 
-  note(message, playeholders = {}) {
-    console.log(this.replace(this.color.blue(message), playeholders));
+  note(message, placeholders = {}) {
+    console.log(this.replace(this.color.blue(message), placeholders));
   }
 
-  warn(message, playeholders = {}) {
+  warn(message, placeholders = {}) {
     message = '[WARN]: ' + message;
-    console.warn(this.replace(this.color.yellow(message), playeholders));
+    console.warn(this.replace(this.color.yellow(message), placeholders));
   }
 
-  error(message, playeholders = {}) {
-    message = '[ERROR]: ' + message;
-    console.error(this.replace(this.color.red(message), playeholders));
-    return new Error(message);
+  error(message, placeholders = {}) {
+    if (message instanceof Error || message.error instanceof Error) {
+      const error = (message.error || message);
+      if (!error.printed) {
+        console.error(this.color.red(error.message), placeholders);
+        error.printed = true;
+      }
+      return error;
+    } else {
+      message = '[ERROR]: ' + message;
+      console.error(this.replace(this.color.red(message), placeholders));
+      const error = new Error(message);
+      error.printed = true;
+      return error;
+    }
   }
 
-  success(message, playeholders = {}) {
+  success(message, placeholders = {}) {
     message = '[SUCCESS]: ' + message;
-    console.log(this.replace(this.bg.green(message), playeholders));
+    console.log(this.replace(this.bg.green(message), placeholders));
   }
 
-  failed(message, playeholders = {}) {
+  failed(message, placeholders = {}) {
     message = '[FAILED]: ' + message;
-    console.error(this.replace(this.bg.red(message), playeholders));
+    console.error(this.replace(this.bg.red(message), placeholders));
   }
 
 }
@@ -118,19 +131,26 @@ class ShellCommand {
   }
 
   getCommand() {
-    if (win) {
-      return this.command.replace(/\\/g, '/');
-    } else {
-      return this.command;
+    if (this._command === null) {
+      if (win) {
+        this._command = this.command.replace(/\\/g, '/');
+      } else {
+        this._command = this.command;
+      }
     }
+    return this._command;
   }
 
-  sh(...args) {
-    return this._executable.sh(args);
+  async exec(command) {
+    return this._executable.checkError(await this._executable.exec(command));
   }
 
-  shell(...args) {
-    return this._executable.shell(args);
+  async sh(...args) {
+    return this._executable.checkError(await this._executable.sh(args));
+  }
+
+  async shell(...args) {
+    return this._executable.checkError(await this._executable.shell(args));
   }
 
   execute(...args) {
@@ -177,7 +197,7 @@ class Git extends ShellCommand {
    * @returns {Promise}
    */
   checkout(branch) {
-    return this.shell(this.getCommand(), 'checkout', branch);
+    return this.execute('checkout', branch);
   }
 
   /**
@@ -196,6 +216,14 @@ class Git extends ShellCommand {
    */
   getCurrentBranch() {
     return this.shExecute('branch', '--show-current').then(data => data.out.trim());
+  }
+
+  pull() {
+    return this.execute('pull');
+  }
+
+  push() {
+    return this.execute('push');
   }
 
 }
@@ -250,12 +278,38 @@ class Drush extends ShellCommand {
     return this.shExecute('eval "echo \\Drupal::database()->getConnectionOptions()[\'database\'];"').then(data => data.out);
   }
 
-  sqlCli(arg) {
-    return this._executable.exec(['echo', arg, '|', '"' + this.getCommand() + '"', 'sql-cli'].join(' ')).then(data => console.log(data)).catch((e) => console.log(e));
+  /**
+   * Channel for "drush sql-cli 'query'"
+   * 
+   * @param {string} query
+   * @returns {Promise<ExecResult>}
+   */
+  sqlCli(query) {
+    return this.exec(['echo', query, '|', '"' + this.getCommand() + '"', 'sql-cli'].join(' '));
   }
 
-  sqlSelect(query) {
-    return this._executable.shell(['echo', '"' + query + '"', '|', '"' + this.getCommand() + '"', 'sql-cli'], null, {}, false, false);
+  /**
+   * @param {string} query 
+   * @returns {Promise<Object<string, any>[]>}
+   */
+  async sqlSelect(query) {
+    const data = await this.sqlCli(query);
+    const lines = data.out.split((win ? '\r\n' : '\n'));
+    const header = lines.shift().split('\t');
+    const rows = [];
+    
+    for (const index in lines) {
+      if (lines[index].trim().length) {
+        const result = lines[index].split('\t');
+        const row = {};
+        for (const i in header) {
+          row[header[i]] = result[i];
+        }
+        rows.push(row);
+      }
+    }
+  
+    return rows;
   }
 
 }
@@ -272,7 +326,7 @@ class Composer extends ShellCommand {
    * @returns {Promise}
    */
   install() {
-    return this.execute('install');
+    return this.exec('sh -c "composer install"');
   }
 
 }
@@ -291,6 +345,7 @@ class Executable {
     this.node = new Node(this);
     this.system = system;
     this.name = name;
+    this._strict = false;
     if (typeof file === 'string') {
       this.file = file;
       this._factory = undefined;
@@ -298,6 +353,10 @@ class Executable {
       this.file = null;
       this._factory = file;
     }
+  }
+
+  async init() {
+    await this.composer.init();
   }
 
   /**
@@ -398,7 +457,7 @@ class Executable {
    * @returns {string}
    */
   get usage() {
-    const output = ['lash', this.name];
+    const output = ['losh', this.name];
 
     if (this.params.length) {
       for (const param of this.params) {
@@ -406,6 +465,22 @@ class Executable {
       }
     }
     return output.join(' ');
+  }
+
+  checkError(result) {
+    if (this._strict && (result instanceof Error || result.error instanceof Error)) {
+      throw result;
+    }
+    return result;
+  }
+
+  strict(boolean) {
+    this._strict = boolean;
+  }
+
+  async which(command) {
+    const result = await this.exec('where ' + command);
+    return result.out.trim();
   }
 
   /**
@@ -420,6 +495,20 @@ class Executable {
   }
 
   /**
+   * Create a path with a starting path and truncate it to relative drupal path.
+   * 
+   * @param {string} path 
+   * @param  {string} cwd The base path [root, drupal, source] 
+   * @returns {string}
+   */
+  relative(path, cwd = 'drupal') {
+    if (path.startsWith(this.system.paths[cwd])) {
+      path = '.' + path.substring(this.system.paths[cwd].length);
+    }
+    return path;
+  }
+
+  /**
    * Execute a command with the launcher.
    * 
    * @param {string[]} args 
@@ -428,9 +517,30 @@ class Executable {
     return this.system.execute(args);
   }
 
+  /**
+   * Execute commanc compatible mode.
+   * 
+   * @param {string} command full command
+   * @returns {Promise<ExecResult>}
+   * 
+   * @typedef {Object} ExecResult
+   * @property {Error} error
+   * @property {string} out
+   * @property {string} err
+   */
   exec(command) {
-    ShellExec(command, (...args) => {
-      console.log(args);
+    return new Promise((resolve) => {
+      ShellExec(command, (error, out, err) => {
+        resolve({error, out, err});
+      });
+    });
+  }
+
+  execFile(file, ...args) {
+    return new Promise((resolve) => {
+      ShellExecFile(file, args, (error, out, err) => {
+        resolve({error, out, err});
+      });
     });
   }
 
@@ -452,7 +562,6 @@ class Executable {
         shell: true,
       };
 
-      console.log(args.join(' '), options);
       const command = ShellSpawn(args.shift(), args, options);
 
       command.on('error', error => {
@@ -495,7 +604,6 @@ class Executable {
         stdio: 'inherit',
       };
 
-      console.log(args.join(' '), options);
       const command = ShellSpawn(args.shift(), args, options);
 
       command.on('error', error => {
@@ -542,17 +650,23 @@ class Executable {
       }
     }
     
-    switch (this.extname) {
-      case '.js':
-        const data = (await this.factory.call(this)) || {};
-
-        data.args = args;
-        data.executable = this;
-        return data;
-      case '.sh':
-        return this.shell(['sh', this.file, ...this._args]);
-      default: 
-        return {args, executable: this, error: this.log.error('The extname [@extname] is unknown.', {'@extname': this.extname})};
+    try {
+      await this.init();
+      switch (this.extname) {
+        case '.js':
+          const data = (await this.factory.call(this)) || {};
+  
+          data.args = args;
+          data.executable = this;
+          return data;
+        case '.sh':
+          return this.shell(['sh', this.file, ...this._args]);
+        default: 
+          return {args, executable: this, error: this.log.error('The extname [@extname] is unknown.', {'@extname': this.extname})};
+      }
+    } catch (error) {
+      this.log.error('Uncatched error in command [!command]', {'!command': this.name});
+      return {error};
     }
   }
 
@@ -744,19 +858,20 @@ class Executable {
    */
   async write(path, content, force = false) {
     try {
-      this.log.note('Write file [' + path + '] ...');
+      this.log.note('Write file [!path] ...', {'!path': path});
       let consent = false;
       if (!force && FS.existsSync(path)) {
         consent = await this.readlineAccept('Do you want to overwrite the file?');
         if (!consent) {
-          return {path, content, force, consent, error: this.log.error('No user consent to overwrite. Abort!')};
+          return this.checkError({path, content, force, consent, error: this.log.error('No user consent to overwrite. Abort!')});
         }
       }
     
       FS.writeFileSync(path, content);
       return {path, content, force, consent};
     } catch (error) {
-      return {path, content, force, consent, error};
+      if (error.error) return this.checkError(error);
+      return this.checkError({path, content, force, error});
     }
   }
 
@@ -832,6 +947,7 @@ class System {
       this.initCommands(debug);
       this.initCommands(version);
       this.initCommands(generate);
+      this.initCommands(test);
       if (this.paths.extension) {
         this.initCommands(this.paths.extension);
       }
@@ -943,9 +1059,16 @@ function debug(resolve) {
 
 /**
  * @this {Executable} 
- * @param {Function} resolve
  */
-function list(resolve) {
+async function test() {
+  const result = await this.composer.install();
+  console.log(result);
+};
+
+/**
+ * @this {Executable} 
+ */
+function list() {
   const type = this.args.type;
 
   function listCommands(title, commands) {
@@ -977,7 +1100,6 @@ function list(resolve) {
   }
 
   listCommands.call(this, 'Commands', this.system.commands);
-  resolve();
 };
 list.params = [
   ['type', 'The information', ['full', 'simple', 'usage', 'format'], 'format'],

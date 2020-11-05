@@ -1,19 +1,33 @@
 /**
  * @this {Executable}
- * @param {Function} resolve 
- * @param {Function} reject
  */
-module.exports = function(resolve, reject) {
-  this.log.note('Deploy ...');
+module.exports = async function() {
+  this.log.note('Deploy');
+  let result = null;
+  
+  const hash = await this.git.getCurrentHash();
+  const path = this.path('extension', 'currenthash.txt');
+  this.log.note('Mark current hash [!hash] here [!path]', {'!path': this.relative(path), '!hash': hash});
+  result = await this.write(path, hash, true);
+  if (result.error) return;
 
-  const promises = [
-    this.composer.install,
-    this.drush.cr,
-    this.drush.cim.bind(this.drush, true),
-  ];
-  this.for(promises).then(() => {
-    this.log.note('Finished ...');
-  });
+  this.log.note('Update code; Update config; Composer install; Compile theme');
+  console.log();
+  this.log.note('Get new code version');
+  result = await this.git.pull();
+  if (result.error) return;
+  const newHash = await this.git.getCurrentHash();
+  this.log.note('New hash [!hash]', {'!hash': newHash});
+  console.log();
+  this.log.note('Update composer');
+  result = await this.composer.install();
+  if (result.error) return;
+  console.log();
+  this.log.note('Update config');
+  await this.drush.cr();
+  await this.drush.cim(true);
+  console.log();
+  // gulp
 };
 module.exports.params = [];
-module.exports.description = 'Deploy script.';
+module.exports.description = 'Standard Deploy Script';

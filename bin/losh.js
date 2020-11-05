@@ -4,11 +4,9 @@ const FS = require('fs');
 const Path = require('path');
 const ShellSpawn = require('child_process').spawn;
 const ShellExec = require('child_process').exec;
-const ShellExecFile = require('child_process').execFile;
 const HTTPS = require('https');
 const OS = require('os');
 const Readline = require('readline');
-const { errorMonitor } = require('stream');
 
 const win = OS.platform() === 'win32';
 
@@ -128,6 +126,7 @@ class ShellCommand {
    */
   constructor(executable) {
     this._executable = executable;
+    this._command = null;
   }
 
   getCommand() {
@@ -145,12 +144,20 @@ class ShellCommand {
     return this._executable.checkError(await this._executable.exec(command));
   }
 
+  shc(...args) {
+    return this.exec('sh -c "' + this.getCommand() + ' ' + args.join(' ') + '"');
+  }
+
   async sh(...args) {
     return this._executable.checkError(await this._executable.sh(args));
   }
 
   async shell(...args) {
     return this._executable.checkError(await this._executable.shell(args));
+  }
+
+  shellc(...args) {
+    return this.shell('sh', '-c', '"' + this.getCommand() + ' ' + args.join(' ') + '"');
   }
 
   execute(...args) {
@@ -326,7 +333,7 @@ class Composer extends ShellCommand {
    * @returns {Promise}
    */
   install() {
-    return this.exec('sh -c "composer install"');
+    return this.shellc('install');
   }
 
 }
@@ -356,7 +363,7 @@ class Executable {
   }
 
   async init() {
-    await this.composer.init();
+    
   }
 
   /**
@@ -536,14 +543,6 @@ class Executable {
     });
   }
 
-  execFile(file, ...args) {
-    return new Promise((resolve) => {
-      ShellExecFile(file, args, (error, out, err) => {
-        resolve({error, out, err});
-      });
-    });
-  }
-
   /**
    * Catch the output of a shell command.
    * 
@@ -665,6 +664,7 @@ class Executable {
           return {args, executable: this, error: this.log.error('The extname [@extname] is unknown.', {'@extname': this.extname})};
       }
     } catch (error) {
+      console.log(error);
       this.log.error('Uncatched error in command [!command]', {'!command': this.name});
       return {error};
     }

@@ -14,7 +14,14 @@ const SCRIPT_NAME = 'losh';
 const SCRIPT_DIRECTORY = 'loom';
 const VERSION = 'main';
 
-class LoshError extends Error {}
+class LoshError extends Error {
+
+  constructor(...args) {
+    super(...args);
+    this.printed = false;
+  }
+
+}
 class ReplaceLoshError extends LoshError {}
 
 class Log {
@@ -771,9 +778,13 @@ class Executable {
     content = content.replace(new RegExp('@(!?[a-z]+)', 'g'), (substring, ...args) => {
       let selected = args[0];
       
-      if (selected.startsWith('!') && !this.system.paths[selected.substring(1)]) {
-        breaked = true;
-        return '';
+      if (selected.startsWith('!')) {
+        if (this.system.paths[selected.substring(1)]) {
+          return this.system.paths[selected.substring(1)];
+        } else {
+          breaked = true;
+          return '';
+        }
       } else {
         return this.system.paths[selected] || substring;
       }
@@ -1013,7 +1024,7 @@ class System {
       } else {
         this.log.warn('No Drupal Root found!');
       }
-      const home = Path.join('~', '.' + SCRIPT_NAME);
+      const home = Path.join(OS.homedir(), '.' + SCRIPT_NAME);
       if (FS.existsSync(home)) {
         this._paths.home = home;
       }
@@ -1165,7 +1176,7 @@ generate.description = 'Generator command.';
  */
 async function install() {
   const pack = this.args.package;
-  const home = Path.join('~', '.' + SCRIPT_NAME);
+  const home = Path.join(OS.homedir(), '.' + SCRIPT_NAME);
 
   if (pack) {
 
@@ -1174,7 +1185,9 @@ async function install() {
     if (FS.existsSync(home)) {
       return {error: this.log.error('The script ' + SCRIPT_NAME + ' is already installed! Abort!')};
     }
-    const result = await this.execute('generate', 'base');
+    FS.mkdirSync(home);
+    this.system._paths.home = home;
+    const result = await this.execute(['generate', 'install']);
     console.log(result);
   }
 };

@@ -4,6 +4,7 @@
     ["?project", "Project Path (IF the only project)"]
   ],
   "files": {
-    "@!home/losh.json": "losh.json"
+    "@!home/losh.json": "install.json",
+    "@!home/extensions.json": "extensions.json"
   }
 }

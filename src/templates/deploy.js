@@ -4,7 +4,7 @@
 module.exports = async function() {
   try {
     this.strict(true);
-    this.log.note('Deployment [type]', {type: this.args.type});
+    this.log.note('Deployment mode [!type]', {'!type': this.args.type});
     console.log();
 
     const hash = await this.git.getCurrentHash();
@@ -40,11 +40,15 @@ module.exports = async function() {
     }
 
     // gulp
+    this.log.note('Final cache flush ...');
     await this.drush.cr();
+    console.log();
+
     this.log.success('Finished.');
   } catch (error) {
-    this.log.failed('Failed with error:');
-    return {error: this.log.error(error)};
+    console.log(error);
+    this.log.failed(error);
+    return error;
   }
 };
 module.exports.params = [

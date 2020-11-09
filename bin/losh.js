@@ -10,8 +10,12 @@ const Readline = require('readline');
 
 const win = OS.platform() === 'win32';
 
+const SCRIPT_NAME = 'losh';
 const SCRIPT_DIRECTORY = 'loom';
 const VERSION = 'main';
+
+class LoshError extends Error {}
+class ReplaceLoshError extends LoshError {}
 
 class Log {
 
@@ -89,20 +93,19 @@ class Log {
   }
 
   error(message, placeholders = {}) {
-    if (message instanceof Error || message.error instanceof Error) {
-      const error = (message.error || message);
+    let error = this.getError(message);
+
+    if (error) {
       if (!error.printed) {
-        console.error(this.color.red(error.message), placeholders);
+        console.error(this.color.red('[ERROR]: ' + error.message + (typeof placeholders === 'string' ? ' ' + placeholders : '')));
         error.printed = true;
       }
-      return error;
     } else {
-      message = '[ERROR]: ' + message;
-      console.error(this.replace(this.color.red(message), placeholders));
-      const error = new Error(message);
+      console.error(this.replace(this.color.red('[ERROR]: ' + message), placeholders));
+      error = new LoshError(message);
       error.printed = true;
-      return error;
     }
+    return error;
   }
 
   success(message, placeholders = {}) {
@@ -110,9 +113,40 @@ class Log {
     console.log(this.replace(this.bg.green(message), placeholders));
   }
 
-  failed(message, placeholders = {}) {
-    message = '[FAILED]: ' + message;
-    console.error(this.replace(this.bg.red(message), placeholders));
+  failed(message, placeholders = {}, full = false) {
+    let error = this.getError(message);
+
+    if (error) {
+      if (!error.printed) {
+        let add = '';
+        if (error.stricted) {
+          add = 'Abort caused by strict mode. ';
+        }
+        if (full) {
+          add += error.stack;
+        } else {
+          add += error.message
+        }
+        console.error(this.bg.red('[FAILED]: ' + add + (typeof placeholders === 'string' ? ' ' + placeholders : '')));
+        error.printed = true;
+      }
+    } else {
+      console.error(this.replace(this.bg.red('[FAILED]: ' + message), placeholders));
+      error = new LoshError(message);
+      error.printed = true;
+    }
+    return error;
+  }
+
+  /**
+   * @param {(string|Object|Error)} message 
+   * @returns {Error}
+   */
+  getError(message) {
+    if (message instanceof Error || message.error instanceof Error) {
+      return message.error || message;
+    }
+    return null;
   }
 
 }
@@ -475,8 +509,13 @@ class Executable {
   }
 
   checkError(result) {
-    if (this._strict && (result instanceof Error || result.error instanceof Error)) {
-      throw result;
+    if (result instanceof Error || result.error instanceof Error) {
+      if (this._strict) {
+        (result.error || result).stricted = true;
+        throw result;
+      } else {
+        this.log.error(result);
+      }
     }
     return result;
   }
@@ -581,7 +620,7 @@ class Executable {
         if (code === 0) {
           resolve(data)
         } else {
-          data.error = new Error('Exit with code: ' + code);
+          data.error = new LoshError('Exit with code: ' + code);
           reject(data);
         }
       });
@@ -614,7 +653,7 @@ class Executable {
         if (code === 0) {
           resolve({ code })
         } else {
-          reject({ code, error: new Error('Exit with code: ' + code) });
+          resolve({ code, error: new LoshError('Exit with code: ' + code) });
         }
       });
     });
@@ -665,8 +704,8 @@ class Executable {
       }
     } catch (error) {
       console.log(error);
-      this.log.error('Uncatched error in command [!command]', {'!command': this.name});
-      return {error};
+      this.log.failed(error, 'Uncaught!', true);
+      return error;
     }
   }
 
@@ -705,14 +744,46 @@ class Executable {
   /**
    * @param {string} content 
    * @param {Object<string, string>} bag 
-   * @returns {string}
+   * @param {boolean} strict
+   * @returns {string|null}
    */
-  replace(content, bag = {}) {
-    for (const item in bag) {
-      content = content.replace(new RegExp('\\{\\{' + item + '\\}\\}', 'g'), bag[item]);
+  replace(content, bag = {}, strict = false) {
+    let breaked = false;
+    content = content.replace(new RegExp('\\{\\{([^!a-zA-Z0-9]*)(!?[a-zA-Z0-9]+)([^!a-zA-Z0-9]*)\\}\\}', 'g'), (substring, ...args) => {
+      let selected = args[1];
+  
+      if (selected.startsWith('!')) {
+        selected = selected.substring(1);
+        if (bag[selected] === null || bag[selected] === undefined) {
+          breaked = true;
+          return '';
+        }
+      }
+      return (bag[selected]) ? args[0] + bag[selected] + args[2] : '';
+    });
+    if (breaked) {
+      if (strict) {
+        throw new ReplaceLoshError('One or more required placeholders are not set in bag.');
+      } else {
+        return null;
+      }
     }
-    for (const path in this.system.paths) {
-      content = content.replace(new RegExp('@' + path, 'g'), this.system.paths[path]);
+    content = content.replace(new RegExp('@(!?[a-z]+)', 'g'), (substring, ...args) => {
+      let selected = args[0];
+      
+      if (selected.startsWith('!') && !this.system.paths[selected.substring(1)]) {
+        breaked = true;
+        return '';
+      } else {
+        return this.system.paths[selected] || substring;
+      }
+    });
+    if (breaked) {
+      if (strict) {
+        throw new ReplaceLoshError('One or more required placeholders are not set in bag.');
+      } else {
+        return null;
+      }
     }
     return content;
   }
@@ -758,11 +829,20 @@ class Executable {
     }
 
     for (const index in form.fields) {
-      const input = await this.readlineWhile('[' + (parseInt(index) + 1) + '/' + form.fields.length + '] ' + this.replace(form.fields[index][1], bag) + ': ', true);
+      const required = !form.fields[index][0].startsWith('?');
+      if (!required) {
+        form.fields[index][0] = form.fields[index][0].substring(1);
+      }
+      const input = await this.readlineWhile('[' + (parseInt(index) + 1) + '/' + form.fields.length + '] ' + this.replace(form.fields[index][1], bag) + ': ', required);
       if (input.error) return {name, form, bag, error: input.error};
       const transformer = form.fields[index][2] || '{{' + form.fields[index][0] + '}}'
       bag[form.fields[index][0]] = input.answer;
-      bag[form.fields[index][0]] = this.replace(transformer, bag);
+      const value = this.replace(transformer, bag);
+      if (value) {
+        bag[form.fields[index][0]] = value; 
+      } else {
+        delete bag[form.fields[index][0]];
+      }
     }
     return {name, form, bag};
   }
@@ -933,6 +1013,10 @@ class System {
       } else {
         this.log.warn('No Drupal Root found!');
       }
+      const home = Path.join('~', '.' + SCRIPT_NAME);
+      if (FS.existsSync(home)) {
+        this._paths.home = home;
+      }
     }
     return this._paths;
   }
@@ -943,11 +1027,16 @@ class System {
   get commands() {
     if (this._commands === null) {
       this._commands = {};
-      this.initCommands(list);
-      this.initCommands(debug);
+      this.initCommands(cr);
+      this.initCommands(cex);
+      this.initCommands(cim);
       this.initCommands(version);
+      this.initCommands(debug);
+      this.initCommands(list);
       this.initCommands(generate);
       this.initCommands(test);
+      this.initCommands(install);
+      this.initCommands(uninstall);
       if (this.paths.extension) {
         this.initCommands(this.paths.extension);
       }
@@ -1001,6 +1090,30 @@ version.params = [];
 version.description = 'Show the current version.';
 
 /**
+ * @this {Executable}
+ */
+async function cr() {
+  await this.drush.cr();
+};
+cr.description = 'Default cr function.';
+
+/**
+ * @this {Executable}
+ */
+async function cim() {
+  await this.drush.cim();
+};
+cim.description = 'Default cim function.';
+
+/**
+ * @this {Executable}
+ */
+async function cex() {
+  await this.drush.cex();
+};
+cex.description = 'Default cex function.';
+
+/**
  * @this {Executable} 
  */
 async function generate() {
@@ -1010,7 +1123,14 @@ async function generate() {
     const files = {};
     for (const path in form.form.files) {
       const template = await this.template(form.form.files[path], form.bag);
-      files[this.replace(Path.normalize(path), form.bag)] = template;
+      try {
+        files[this.replace(Path.normalize(path), form.bag, true)] = template;
+      } catch (e) {
+        if (e instanceof ReplaceLoshError) {
+          throw this.log.error('File [!path] can not be generated because: [message]', {'!path': path, message: e.message});
+        }
+        throw e;
+      }
     }
     this.log.note('Would generate this files:');
     for (const file in files) {
@@ -1031,14 +1151,42 @@ async function generate() {
       return;
     }
   } catch (error) {
-    this.log.error(error.message);
-    return {error};
+    this.log.failed(error);
+    return error;
   }
 };
 generate.params = [
   ['name']
 ];
 generate.description = 'Generator command.';
+
+/**
+ * @this {Executable}
+ */
+async function install() {
+  const pack = this.args.package;
+  const home = Path.join('~', '.' + SCRIPT_NAME);
+
+  if (pack) {
+
+  } else {
+    this.log.note('Install ' + SCRIPT_NAME + ' on this system.');
+    if (FS.existsSync(home)) {
+      return {error: this.log.error('The script ' + SCRIPT_NAME + ' is already installed! Abort!')};
+    }
+    const result = await this.execute('generate', 'base');
+    console.log(result);
+  }
+};
+install.params = [
+  ['package', 'The name of the package.'],
+];
+install.description = 'Install the script for extensions and configs. (Optional)';
+
+async function uninstall() {
+
+};
+uninstall.description = 'Uninstall the script.';
 
 /**
  * @this {Executable} 
@@ -1061,7 +1209,13 @@ function debug(resolve) {
  * @this {Executable} 
  */
 async function test() {
-  const result = await this.composer.install();
+  const bag = {
+    'e': 'cool',
+    'd': 'huhu',
+    'c': null,
+  };
+  const subject = '{{a }}{{!b }}{{c }}{{d }}{{a }}{{|a | }}{{|  !b|}}@homed';
+  const result = this.replace(subject, bag);
   console.log(result);
 };
 

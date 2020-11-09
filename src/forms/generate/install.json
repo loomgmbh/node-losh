@@ -1,0 +1,9 @@
+{
+  "description": "Generate a install config",
+  "fields": [
+    ["?project", "Project Path (IF the only project)"]
+  ],
+  "files": {
+    "@!home/losh.json": "losh.json"
+  }
+}
